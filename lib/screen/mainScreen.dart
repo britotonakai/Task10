@@ -36,11 +36,23 @@ class _mainScreenState extends State<mainScreen> {
   String roomID = '';
   late RTCSessionDescription answer;
   late List<RTCIceCandidate> candidates;
-  final RTCVideoRenderer _localRender = RTCVideoRenderer();
-  late RTCVideoRenderer _remoteRender = RTCVideoRenderer();
+  late MediaStream _localStream, _remoteStream;
+  late final RTCVideoRenderer _localRender = RTCVideoRenderer();
+  late final RTCVideoRenderer _remoteRender = RTCVideoRenderer();
+  List<RTCVideoRenderer> _remoteRenderers = [];
+
   Map<String, dynamic> mediaConstraints = {
     'audio': true,
-    'video': true,
+    'video': {
+      'mandatory': {
+        'minWidth':
+            '1280', // Provide your own width, height and frame rate here
+        'minHeight': '720',
+        'minFrameRate': '30',
+      },
+      'facingMode': 'user',
+      'optional': [],
+    },
   };
 
   static const Map<String, dynamic> _configuration = {
@@ -108,6 +120,7 @@ class _mainScreenState extends State<mainScreen> {
 
     final newRoomID = await _createRoom();
     debugPrint('createRoom : $newRoomID');
+
     RTCSessionDescription offer = await _createOffer(newRoomID);
 
     peerConnection.onIceCandidate = ((RTCIceCandidate newCandidate) async {
@@ -116,21 +129,24 @@ class _mainScreenState extends State<mainScreen> {
 
     await peerConnection.setLocalDescription(offer);
 
-    peerConnection.onAddStream = (mediaStream) {
-      print('Received mediaStream: $mediaStream');
+    _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
 
-      Future.delayed(Duration.zero, () {
-        setState(() {
-          _localStreams.add(mediaStream.getTracks().first);
-          _localRender.srcObject = mediaStream;
-          debugPrint('localRender $_localRender');
-        });
-      });
-    };
+    _localRender.srcObject = _localStream;
+    _localStreams.add(_localStream.getTracks().first);
+    _remoteRenderers.add(_localRender);
+
+    // peerConnection.onAddStream = (mediaStream) {
+    //   setState(() {
+    //     _localStreams.add(mediaStream.getTracks().first);
+    //     _localRender.srcObject = mediaStream;
+    //   });
+    // };
 
     Navigator.pushNamed(context, '/video', arguments: {
       'roomID': newRoomID,
-      'localRender': _localRender,
+      'listRender': _remoteRenderers,
+      // 'remoteRender': _remoteRender,
+      // 'localRender': _localRender,
       'localStreams': _localStreams,
     });
   }
@@ -142,13 +158,14 @@ class _mainScreenState extends State<mainScreen> {
     if (!roomDOC.exists) {
       throw Exception('Room not found!');
     }
-    debugPrint(roomDOC.toString());
 
     final offerSDP = roomDOC.data()!['sdp'];
     final offerType = roomDOC.data()!['type'];
 
-    debugPrint('$offerSDP - $offerType');
+    // debugPrint('$offerSDP - $offerType');
     await _createPeerConnection();
+
+    _remoteStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
 
     // joinPeerConnection = await _createPeerConnection();
 
@@ -166,28 +183,25 @@ class _mainScreenState extends State<mainScreen> {
       await _sendIceCandidate(newCandidate, roomID);
     });
 
-    peerConnection.onAddStream = (mediaStream) {
-      print('Received mediaStream: $mediaStream');
+    _remoteRender.srcObject = _remoteStream;
+    _localStreams.add(_remoteStream.getTracks().first);
+    _remoteRenderers.add(_remoteRender);
 
-      final isLocalUserStream =
-          mediaStream.id.contains(auth.currentUser?.uid ?? '');
+    peerConnection.onAddStream = (mediaStream) {
       setState(() {
-        if (!isLocalUserStream) {
-          final remoteRenderer = RTCVideoRenderer();
-          remoteRenderer.srcObject = mediaStream;
-          _remoteRender = remoteRenderer;
-        } else {
-          _localStreams.add(mediaStream.getTracks().first);
-          _localRender.srcObject = mediaStream;
-          debugPrint('localRender : $_localRender');
-        }
+        _localStreams.add(mediaStream.getTracks().first);
+        _localRender.srcObject = mediaStream;
       });
     };
 
+    await firestore.collection('rooms').doc(roomID).update(
+      {'participants': _localStreams.length},
+    );
     Navigator.pushNamed(context, '/video', arguments: {
       'roomID': roomID,
-      'remoteRender': _remoteRender,
-      'localRender': _localRender,
+      'listRender': _remoteRenderers,
+      // 'remoteRender': _remoteRender,
+      // 'localRender': _localRender,
       'localStreams': _localStreams,
     });
   }
@@ -304,8 +318,8 @@ class _mainScreenState extends State<mainScreen> {
                   width: 20,
                 ),
                 SizedBox(
-                  width: 200,
-                  height: 30,
+                  width: 300,
+                  height: 48,
                   child: TextField(
                     controller: idController,
                     decoration: const InputDecoration(
@@ -317,6 +331,7 @@ class _mainScreenState extends State<mainScreen> {
                       ),
                     ),
                     textAlign: TextAlign.center,
+                    maxLines: 1,
                   ),
                 ),
                 const SizedBox(
